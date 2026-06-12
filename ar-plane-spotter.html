@@ -1,0 +1,1201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#000000">
+<title>AR Plane Spotter</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --radar-green: #00ff88;
+    --radar-dim: #00cc6688;
+    --radar-faint: #00ff8822;
+    --sky-blue: #4fc3f7;
+    --alert-amber: #ffb300;
+    --bg-dark: #000000;
+    --panel-bg: rgba(0,0,0,0.72);
+    --font-mono: 'Courier New', monospace;
+    --font-ui: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
+  }
+
+  html, body {
+    width: 100%; height: 100%;
+    background: #000;
+    overflow: hidden;
+    font-family: var(--font-ui);
+    color: #fff;
+  }
+
+  /* ── CAMERA LAYER ── */
+  #camera-feed {
+    position: fixed;
+    inset: 0;
+    width: 100%; height: 100%;
+    object-fit: cover;
+    z-index: 0;
+  }
+
+  /* ── AR CANVAS ── */
+  #ar-canvas {
+    position: fixed;
+    inset: 0;
+    width: 100%; height: 100%;
+    z-index: 10;
+    pointer-events: none;
+  }
+
+  /* ── SCAN LINE EFFECT ── */
+  #scan-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 11;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,255,136,0.015) 2px,
+      rgba(0,255,136,0.015) 4px
+    );
+  }
+
+  /* ── TOP STATUS BAR ── */
+  #status-bar {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    z-index: 30;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 52px 16px 12px;
+    background: linear-gradient(to bottom, rgba(0,0,0,0.85) 0%, transparent 100%);
+  }
+
+  .status-logo {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    letter-spacing: 3px;
+    color: var(--radar-green);
+    text-transform: uppercase;
+    font-weight: 700;
+  }
+
+  .status-logo span {
+    color: #fff;
+    font-weight: 300;
+  }
+
+  #flight-count {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--radar-green);
+    letter-spacing: 1px;
+    background: rgba(0,255,136,0.1);
+    border: 1px solid rgba(0,255,136,0.3);
+    padding: 4px 10px;
+    border-radius: 3px;
+  }
+
+  /* ── COMPASS BAR ── */
+  #compass-strip {
+    position: fixed;
+    top: 100px;
+    left: 0; right: 0;
+    z-index: 30;
+    height: 36px;
+    pointer-events: none;
+    overflow: hidden;
+  }
+
+  #compass-inner {
+    position: absolute;
+    top: 0;
+    height: 100%;
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    transition: transform 0.1s linear;
+  }
+
+  .compass-tick {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    width: 20px;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: rgba(255,255,255,0.45);
+  }
+
+  .compass-tick.major {
+    font-size: 10px;
+    color: rgba(255,255,255,0.75);
+  }
+
+  .compass-tick .tick-line {
+    width: 1px;
+    height: 8px;
+    background: rgba(255,255,255,0.3);
+    margin-bottom: 2px;
+  }
+
+  .compass-tick.major .tick-line {
+    height: 12px;
+    background: rgba(255,255,255,0.6);
+  }
+
+  #compass-center {
+    position: absolute;
+    top: 0; bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 2px;
+    background: var(--radar-green);
+    box-shadow: 0 0 6px var(--radar-green);
+  }
+
+  #compass-heading-display {
+    position: absolute;
+    bottom: -18px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--radar-green);
+    letter-spacing: 2px;
+    background: rgba(0,255,136,0.12);
+    padding: 2px 8px;
+    border-radius: 2px;
+    white-space: nowrap;
+  }
+
+  /* ── BOTTOM PANEL ── */
+  #bottom-panel {
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    z-index: 30;
+    padding: 0 0 env(safe-area-inset-bottom, 0);
+    background: linear-gradient(to top, rgba(0,0,0,0.9) 0%, rgba(0,0,0,0.6) 70%, transparent 100%);
+  }
+
+  #nearest-flight-card {
+    margin: 8px 12px;
+    background: rgba(0,0,0,0.6);
+    border: 1px solid rgba(0,255,136,0.25);
+    border-radius: 10px;
+    padding: 12px 14px;
+    display: none;
+    backdrop-filter: blur(8px);
+  }
+
+  .flight-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+  }
+
+  .flight-callsign {
+    font-family: var(--font-mono);
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--radar-green);
+    letter-spacing: 2px;
+  }
+
+  .flight-airline {
+    font-size: 11px;
+    color: rgba(255,255,255,0.55);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+
+  .flight-badge {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    padding: 3px 8px;
+    border-radius: 3px;
+    background: rgba(0,255,136,0.15);
+    border: 1px solid rgba(0,255,136,0.35);
+    color: var(--radar-green);
+    letter-spacing: 1px;
+  }
+
+  .flight-stats-row {
+    display: flex;
+    gap: 0;
+    border-top: 1px solid rgba(255,255,255,0.07);
+    padding-top: 8px;
+  }
+
+  .stat-block {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 0 4px;
+    border-right: 1px solid rgba(255,255,255,0.07);
+  }
+
+  .stat-block:last-child { border-right: none; }
+
+  .stat-value {
+    font-family: var(--font-mono);
+    font-size: 14px;
+    font-weight: 700;
+    color: #fff;
+    line-height: 1;
+  }
+
+  .stat-label {
+    font-size: 9px;
+    color: rgba(255,255,255,0.4);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    margin-top: 3px;
+  }
+
+  .route-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+
+  .route-airport {
+    font-family: var(--font-mono);
+    font-size: 16px;
+    font-weight: 700;
+    color: #fff;
+  }
+
+  .route-arrow {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 9px;
+    color: rgba(255,255,255,0.3);
+  }
+
+  .route-line {
+    flex: 1;
+    height: 1px;
+    background: linear-gradient(to right, rgba(255,255,255,0.2), rgba(0,255,136,0.5), rgba(255,255,255,0.2));
+  }
+
+  .route-aircraft {
+    font-size: 9px;
+    color: rgba(255,255,255,0.4);
+    letter-spacing: 1px;
+  }
+
+  /* ── FLIGHT LIST ── */
+  #flight-list-bar {
+    display: flex;
+    gap: 8px;
+    padding: 6px 12px 10px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  #flight-list-bar::-webkit-scrollbar { display: none; }
+
+  .mini-chip {
+    flex-shrink: 0;
+    background: rgba(0,0,0,0.5);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 6px;
+    padding: 5px 10px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+    min-width: 60px;
+  }
+
+  .mini-chip.active {
+    border-color: var(--radar-green);
+    background: rgba(0,255,136,0.1);
+  }
+
+  .mini-chip-call {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 700;
+    color: #fff;
+    letter-spacing: 1px;
+  }
+
+  .mini-chip-dist {
+    font-size: 9px;
+    color: rgba(255,255,255,0.4);
+    margin-top: 1px;
+  }
+
+  /* ── PERMISSION / LOADING SCREENS ── */
+  #loading-screen, #permission-screen {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    background: #000;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 20px;
+    padding: 32px;
+    text-align: center;
+  }
+
+  #permission-screen { display: none; }
+
+  .big-icon {
+    font-size: 64px;
+    filter: drop-shadow(0 0 20px rgba(0,255,136,0.5));
+  }
+
+  .screen-title {
+    font-family: var(--font-mono);
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--radar-green);
+    letter-spacing: 4px;
+    text-transform: uppercase;
+  }
+
+  .screen-sub {
+    font-size: 14px;
+    color: rgba(255,255,255,0.5);
+    line-height: 1.6;
+    max-width: 280px;
+  }
+
+  .radar-ring {
+    width: 80px; height: 80px;
+    border-radius: 50%;
+    border: 2px solid rgba(0,255,136,0.2);
+    position: relative;
+    animation: radar-pulse 2s ease-out infinite;
+  }
+
+  .radar-ring::before {
+    content: '';
+    position: absolute;
+    inset: 8px;
+    border-radius: 50%;
+    border: 2px solid rgba(0,255,136,0.3);
+    animation: radar-pulse 2s ease-out infinite 0.4s;
+  }
+
+  .radar-ring::after {
+    content: '✈';
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 28px;
+    color: var(--radar-green);
+  }
+
+  @keyframes radar-pulse {
+    0% { transform: scale(1); opacity: 1; }
+    100% { transform: scale(1.5); opacity: 0; }
+  }
+
+  .btn-primary {
+    background: var(--radar-green);
+    color: #000;
+    border: none;
+    border-radius: 10px;
+    padding: 14px 32px;
+    font-size: 15px;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .loading-status {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: rgba(0,255,136,0.6);
+    letter-spacing: 2px;
+    animation: blink 1.2s ease-in-out infinite;
+  }
+
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+
+  /* ── ERROR TOAST ── */
+  #toast {
+    position: fixed;
+    bottom: 160px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 50;
+    background: rgba(255,80,80,0.9);
+    color: #fff;
+    font-size: 12px;
+    padding: 8px 16px;
+    border-radius: 20px;
+    white-space: nowrap;
+    opacity: 0;
+    transition: opacity 0.3s;
+    pointer-events: none;
+  }
+
+  #toast.show { opacity: 1; }
+
+  /* ── AR PLANE MARKER (drawn on canvas but also CSS ref) ── */
+  #refresh-btn {
+    position: fixed;
+    top: 154px;
+    right: 14px;
+    z-index: 30;
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    background: rgba(0,0,0,0.55);
+    border: 1px solid rgba(0,255,136,0.3);
+    color: var(--radar-green);
+    font-size: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  #tilt-guide {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 20;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.5s;
+  }
+
+  #tilt-guide.show { opacity: 1; }
+
+  .crosshair {
+    width: 50px; height: 50px;
+    position: relative;
+  }
+
+  .crosshair::before, .crosshair::after {
+    content: '';
+    position: absolute;
+    background: rgba(0,255,136,0.5);
+  }
+
+  .crosshair::before {
+    width: 1px; height: 100%;
+    left: 50%; transform: translateX(-50%);
+  }
+
+  .crosshair::after {
+    height: 1px; width: 100%;
+    top: 50%; transform: translateY(-50%);
+  }
+
+  #no-orient-warning {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 40;
+    background: rgba(0,0,0,0.85);
+    border: 1px solid rgba(255,179,0,0.5);
+    border-radius: 12px;
+    padding: 20px 24px;
+    text-align: center;
+    max-width: 280px;
+    display: none;
+  }
+
+  #no-orient-warning h3 {
+    color: var(--alert-amber);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    letter-spacing: 2px;
+    margin-bottom: 8px;
+  }
+
+  #no-orient-warning p {
+    font-size: 12px;
+    color: rgba(255,255,255,0.6);
+    line-height: 1.5;
+  }
+
+  #orient-grant-btn {
+    margin-top: 12px;
+    background: var(--alert-amber);
+    color: #000;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 20px;
+    font-weight: 700;
+    font-size: 12px;
+    cursor: pointer;
+    font-family: var(--font-mono);
+    letter-spacing: 1px;
+  }
+</style>
+</head>
+<body>
+
+<!-- Camera feed -->
+<video id="camera-feed" autoplay playsinline muted></video>
+
+<!-- AR Canvas overlay -->
+<canvas id="ar-canvas"></canvas>
+
+<!-- Scan line aesthetic -->
+<div id="scan-overlay"></div>
+
+<!-- Tilt crosshair -->
+<div id="tilt-guide"><div class="crosshair"></div></div>
+
+<!-- Top status bar -->
+<div id="status-bar">
+  <div class="status-logo">AR<span>spotter</span></div>
+  <div id="flight-count">SCANNING...</div>
+</div>
+
+<!-- Compass strip -->
+<div id="compass-strip">
+  <div id="compass-inner"></div>
+  <div id="compass-center"></div>
+  <div id="compass-heading-display">000°</div>
+</div>
+
+<!-- Refresh button -->
+<button id="refresh-btn" title="Refresh flights">↻</button>
+
+<!-- Bottom panel -->
+<div id="bottom-panel">
+  <div id="flight-list-bar"></div>
+  <div id="nearest-flight-card">
+    <div class="flight-card-header">
+      <div>
+        <div class="flight-callsign" id="card-callsign">—</div>
+        <div class="flight-airline" id="card-airline">—</div>
+      </div>
+      <div class="flight-badge" id="card-badge">—</div>
+    </div>
+    <div class="route-row">
+      <div class="route-airport" id="card-dep">—</div>
+      <div class="route-arrow">
+        <div class="route-line"></div>
+        ✈
+        <div class="route-line"></div>
+      </div>
+      <div class="route-airport" id="card-arr">—</div>
+    </div>
+    <div class="route-aircraft" id="card-aircraft" style="margin-bottom:8px;font-size:10px;color:rgba(255,255,255,0.4)">—</div>
+    <div class="flight-stats-row">
+      <div class="stat-block">
+        <div class="stat-value" id="card-alt">—</div>
+        <div class="stat-label">ALT ft</div>
+      </div>
+      <div class="stat-block">
+        <div class="stat-value" id="card-spd">—</div>
+        <div class="stat-label">SPD kts</div>
+      </div>
+      <div class="stat-block">
+        <div class="stat-value" id="card-hdg">—</div>
+        <div class="stat-label">HDG °</div>
+      </div>
+      <div class="stat-block">
+        <div class="stat-value" id="card-dist">—</div>
+        <div class="stat-label">DIST nm</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- No orientation warning -->
+<div id="no-orient-warning">
+  <h3>⚠ SENSOR ACCESS</h3>
+  <p>AR overlay needs device orientation. On iOS 13+, tap below to grant permission.</p>
+  <button id="orient-grant-btn" onclick="requestOrientPermission()">GRANT SENSOR ACCESS</button>
+</div>
+
+<!-- Loading screen -->
+<div id="loading-screen">
+  <div class="radar-ring"></div>
+  <div class="screen-title">AR Spotter</div>
+  <div class="screen-sub">Point your phone at the sky to see live flight data overlaid in augmented reality</div>
+  <div class="loading-status" id="load-status">INITIALIZING CAMERA...</div>
+</div>
+
+<!-- Permission screen -->
+<div id="permission-screen">
+  <div class="big-icon">📷</div>
+  <div class="screen-title">Camera Access</div>
+  <div class="screen-sub">AR Spotter needs your camera to overlay flight data on the live sky view.</div>
+  <button class="btn-primary" onclick="startCamera()">ENABLE CAMERA</button>
+</div>
+
+<div id="toast"></div>
+
+<script>
+// ─────────────────────────────────────────────
+// CONFIG
+// ─────────────────────────────────────────────
+const AIRLABS_KEY = 'c5bb82cf-3dc0-4ca3-b1e6-e39bb81ea3c6';
+const AIRLABS_URL = 'https://airlabs.co/api/v9/flights';
+const REFRESH_INTERVAL = 30000; // 30 seconds
+const SEARCH_RADIUS_NM = 150;   // nautical miles
+const FOV_H = 60;               // horizontal field of view degrees
+const FOV_V = 90;               // vertical field of view degrees (generous for tilt range)
+
+// ─────────────────────────────────────────────
+// STATE
+// ─────────────────────────────────────────────
+let userLat = null, userLon = null;
+let deviceHeading = 0;   // compass heading 0-360
+let devicePitch = 0;     // tilt -90..+90 (90 = looking up)
+let deviceRoll = 0;
+let flights = [];
+let selectedFlight = null;
+let animFrame = null;
+let compassBuilt = false;
+let orientationGranted = false;
+
+const canvas = document.getElementById('ar-canvas');
+const ctx = canvas.getContext('2d');
+
+// ─────────────────────────────────────────────
+// UTILITIES
+// ─────────────────────────────────────────────
+function toRad(d) { return d * Math.PI / 180; }
+function toDeg(r) { return r * 180 / Math.PI; }
+
+function haversineNM(lat1, lon1, lat2, lon2) {
+  const R = 3440.065; // nautical miles
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon/2)**2;
+  return R * 2 * Math.asin(Math.sqrt(a));
+}
+
+function bearingTo(lat1, lon1, lat2, lon2) {
+  const dLon = toRad(lon2 - lon1);
+  const y = Math.sin(dLon) * Math.cos(toRad(lat2));
+  const x = Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) - Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(dLon);
+  return (toDeg(Math.atan2(y, x)) + 360) % 360;
+}
+
+function elevationAngle(distNM, altFt) {
+  // Distance in nautical miles → feet (1 NM = 6076 ft)
+  const distFt = distNM * 6076;
+  if (distFt < 1) return 90;
+  return toDeg(Math.atan2(altFt, distFt));
+}
+
+function showToast(msg, duration = 3000) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), duration);
+}
+
+function setLoadStatus(msg) {
+  document.getElementById('load-status').textContent = msg;
+}
+
+// ─────────────────────────────────────────────
+// RESIZE CANVAS
+// ─────────────────────────────────────────────
+function resizeCanvas() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+// ─────────────────────────────────────────────
+// COMPASS STRIP BUILD
+// ─────────────────────────────────────────────
+function buildCompass() {
+  if (compassBuilt) return;
+  const inner = document.getElementById('compass-inner');
+  inner.innerHTML = '';
+  // Build 3 full rotations worth so we can scroll
+  for (let rep = 0; rep < 3; rep++) {
+    for (let d = 0; d < 360; d += 5) {
+      const el = document.createElement('div');
+      const isMajor = d % 45 === 0;
+      const isCardinal = d % 90 === 0;
+      el.className = 'compass-tick' + (isMajor ? ' major' : '');
+      const line = document.createElement('div');
+      line.className = 'tick-line';
+      el.appendChild(line);
+      const label = document.createElement('span');
+      if (isCardinal) {
+        label.textContent = ['N','E','S','W'][d/90];
+        el.style.color = d === 0 ? 'var(--radar-green)' : '';
+      } else if (isMajor) {
+        label.textContent = d;
+      } else {
+        label.textContent = '';
+      }
+      el.appendChild(label);
+      inner.appendChild(el);
+    }
+  }
+  compassBuilt = true;
+}
+
+function updateCompass(heading) {
+  if (!compassBuilt) buildCompass();
+  const inner = document.getElementById('compass-inner');
+  const totalWidth = inner.scrollWidth / 3;
+  // Center on heading (second repetition)
+  const tickWidth = 20; // px per 5 degrees
+  const pixelsPerDegree = tickWidth / 5;
+  const offset = (heading * pixelsPerDegree) + totalWidth;
+  inner.style.transform = `translateX(${window.innerWidth/2 - offset}px)`;
+
+  const hdg = Math.round(heading);
+  document.getElementById('compass-heading-display').textContent =
+    `${String(hdg).padStart(3,'0')}° · ${headingToCardinal(heading)}`;
+}
+
+function headingToCardinal(h) {
+  const dirs = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+  return dirs[Math.round(h / 22.5) % 16];
+}
+
+// ─────────────────────────────────────────────
+// DEVICE ORIENTATION
+// ─────────────────────────────────────────────
+function setupOrientation() {
+  if (typeof DeviceOrientationEvent === 'undefined') {
+    showOrientWarning();
+    return;
+  }
+
+  function handleOrientation(e) {
+    if (e.webkitCompassHeading !== undefined) {
+      // iOS
+      deviceHeading = e.webkitCompassHeading || 0;
+    } else if (e.alpha !== null) {
+      // Android — alpha=0 means north on some devices
+      deviceHeading = (360 - e.alpha) % 360;
+    }
+
+    // Beta: 0=flat, 90=upright, >90=tilted back
+    // We want pitch where 0=horizontal, 90=looking straight up
+    if (e.beta !== null) {
+      // beta 90 = upright, 0 = flat on table face up
+      devicePitch = e.beta - 90; // now 0=horizontal, 90=looking down, -90=looking up
+      devicePitch = -devicePitch; // flip so positive = looking up
+    }
+
+    if (e.gamma !== null) {
+      deviceRoll = e.gamma;
+    }
+
+    updateCompass(deviceHeading);
+    orientationGranted = true;
+  }
+
+  if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+    // iOS 13+ needs permission
+    document.getElementById('no-orient-warning').style.display = 'block';
+  } else {
+    window.addEventListener('deviceorientation', handleOrientation, true);
+  }
+
+  window._orientHandler = handleOrientation;
+}
+
+async function requestOrientPermission() {
+  try {
+    const perm = await DeviceOrientationEvent.requestPermission();
+    if (perm === 'granted') {
+      window.addEventListener('deviceorientation', window._orientHandler, true);
+      document.getElementById('no-orient-warning').style.display = 'none';
+    }
+  } catch(e) {
+    showToast('Sensor permission denied');
+  }
+}
+
+function showOrientWarning() {
+  document.getElementById('no-orient-warning').style.display = 'block';
+}
+
+// ─────────────────────────────────────────────
+// GEOLOCATION
+// ─────────────────────────────────────────────
+function getLocation() {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      reject(new Error('Geolocation not supported'));
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      pos => { userLat = pos.coords.latitude; userLon = pos.coords.longitude; resolve(); },
+      err => reject(err),
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  });
+}
+
+// ─────────────────────────────────────────────
+// AIRLABS FLIGHT DATA
+// ─────────────────────────────────────────────
+async function fetchFlights() {
+  if (userLat === null) return;
+  try {
+    document.getElementById('flight-count').textContent = 'UPDATING...';
+    // AirLabs bbox: lat1,lng1,lat2,lng2 (approx ~150nm box)
+    const delta = 2.5; // degrees (rough ~150nm)
+    const bbox = `${(userLat-delta).toFixed(3)},${(userLon-delta).toFixed(3)},${(userLat+delta).toFixed(3)},${(userLon+delta).toFixed(3)}`;
+
+    const url = `${AIRLABS_URL}?api_key=${AIRLABS_KEY}&bbox=${bbox}`;
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`API ${resp.status}`);
+    const data = await resp.json();
+
+    if (data.error) throw new Error(data.error.message || 'API error');
+
+    const raw = data.response || [];
+    flights = raw
+      .filter(f => f.lat && f.lng && f.alt > 0)
+      .map(f => {
+        const distNM = haversineNM(userLat, userLon, f.lat, f.lng);
+        const bearing = bearingTo(userLat, userLon, f.lat, f.lng);
+        const elevation = elevationAngle(distNM, f.alt * 3.28084); // meters to feet
+        return { ...f, distNM, bearing, elevation };
+      })
+      .filter(f => f.distNM <= SEARCH_RADIUS_NM)
+      .sort((a, b) => a.distNM - b.distNM);
+
+    document.getElementById('flight-count').textContent = `${flights.length} FLIGHTS`;
+    updateFlightChips();
+    if (flights.length > 0 && !selectedFlight) selectFlight(flights[0]);
+
+  } catch(e) {
+    console.error(e);
+    showToast('Flight data error: ' + e.message);
+    document.getElementById('flight-count').textContent = 'ERROR';
+  }
+}
+
+// ─────────────────────────────────────────────
+// FLIGHT CHIPS (bottom list)
+// ─────────────────────────────────────────────
+function updateFlightChips() {
+  const bar = document.getElementById('flight-list-bar');
+  bar.innerHTML = '';
+  flights.slice(0, 20).forEach(f => {
+    const chip = document.createElement('div');
+    chip.className = 'mini-chip' + (selectedFlight && f.hex === selectedFlight.hex ? ' active' : '');
+    chip.innerHTML = `<div class="mini-chip-call">${f.flight_iata || f.hex || '???'}</div>
+                      <div class="mini-chip-dist">${f.distNM.toFixed(0)}nm</div>`;
+    chip.addEventListener('click', () => selectFlight(f));
+    bar.appendChild(chip);
+  });
+}
+
+// ─────────────────────────────────────────────
+// SELECT FLIGHT → update card
+// ─────────────────────────────────────────────
+function selectFlight(f) {
+  selectedFlight = f;
+  const card = document.getElementById('nearest-flight-card');
+  card.style.display = 'block';
+  document.getElementById('card-callsign').textContent = f.flight_iata || f.flight_icao || f.hex || '—';
+  document.getElementById('card-airline').textContent = f.airline_iata || f.airline_icao || '—';
+  document.getElementById('card-badge').textContent = f.status === 'en-route' ? '● EN ROUTE' : (f.status || 'LIVE').toUpperCase();
+  document.getElementById('card-dep').textContent = f.dep_iata || f.dep_icao || '—';
+  document.getElementById('card-arr').textContent = f.arr_iata || f.arr_icao || '—';
+  document.getElementById('card-aircraft').textContent = f.aircraft_icao || f.model || '—';
+  document.getElementById('card-alt').textContent = f.alt ? Math.round(f.alt * 3.281).toLocaleString() : '—';
+  document.getElementById('card-spd').textContent = f.speed ? Math.round(f.speed * 0.539957) : '—'; // km/h to knots
+  document.getElementById('card-hdg').textContent = f.dir ? Math.round(f.dir) : '—';
+  document.getElementById('card-dist').textContent = f.distNM ? f.distNM.toFixed(1) : '—';
+  updateFlightChips();
+}
+
+// ─────────────────────────────────────────────
+// AR RENDERING — project flight onto screen
+// ─────────────────────────────────────────────
+function projectToScreen(flight) {
+  // Angular offset from where we're looking
+  let relBearing = flight.bearing - deviceHeading;
+  // Normalize to -180..+180
+  while (relBearing > 180) relBearing -= 360;
+  while (relBearing < -180) relBearing += 360;
+
+  // Elevation relative to device pitch
+  let relElevation = flight.elevation - devicePitch;
+
+  // Check if in view
+  if (Math.abs(relBearing) > FOV_H / 2 + 15) return null;
+  if (Math.abs(relElevation) > FOV_V / 2 + 15) return null;
+
+  const cx = canvas.width / 2;
+  const cy = canvas.height / 2;
+
+  const x = cx + (relBearing / (FOV_H / 2)) * cx;
+  const y = cy - (relElevation / (FOV_V / 2)) * cy;
+
+  const inView = Math.abs(relBearing) <= FOV_H/2 && Math.abs(relElevation) <= FOV_V/2;
+  return { x, y, inView, relBearing, relElevation };
+}
+
+function drawPlaneMarker(flight, pos, isSelected) {
+  const { x, y, inView } = pos;
+  const alpha = inView ? 1 : 0.35;
+  const altFt = flight.alt ? Math.round(flight.alt * 3.281) : 0;
+  const callsign = flight.flight_iata || flight.flight_icao || flight.hex || '???';
+  const distNM = flight.distNM.toFixed(1);
+  const hdg = flight.dir || 0;
+  const relBearing = pos.relBearing;
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+
+  // ── Glow ring ──
+  const ringR = isSelected ? 28 : 18;
+  const gradient = ctx.createRadialGradient(x, y, 0, x, y, ringR * 1.5);
+  gradient.addColorStop(0, isSelected ? 'rgba(0,255,136,0.3)' : 'rgba(79,195,247,0.15)');
+  gradient.addColorStop(1, 'transparent');
+  ctx.beginPath();
+  ctx.arc(x, y, ringR * 1.5, 0, Math.PI * 2);
+  ctx.fillStyle = gradient;
+  ctx.fill();
+
+  // ── Outer ring ──
+  ctx.beginPath();
+  ctx.arc(x, y, ringR, 0, Math.PI * 2);
+  ctx.strokeStyle = isSelected ? 'rgba(0,255,136,0.9)' : 'rgba(79,195,247,0.7)';
+  ctx.lineWidth = isSelected ? 2 : 1.5;
+  ctx.stroke();
+
+  // ── Plane icon (rotated by heading relative to bearing) ──
+  ctx.translate(x, y);
+  ctx.rotate(toRad(hdg - deviceHeading + relBearing));
+
+  const s = isSelected ? 10 : 7;
+  ctx.fillStyle = isSelected ? 'rgba(0,255,136,1)' : 'rgba(79,195,247,0.9)';
+  ctx.beginPath();
+  // Simple plane shape
+  ctx.moveTo(0, -s);         // nose
+  ctx.lineTo(s*0.4, 0);      // right wing front
+  ctx.lineTo(s*1.1, s*0.3);  // right wingtip
+  ctx.lineTo(s*0.4, s*0.5);  // right wing back
+  ctx.lineTo(s*0.25, s);     // tail right
+  ctx.lineTo(0, s*0.7);      // tail center
+  ctx.lineTo(-s*0.25, s);    // tail left
+  ctx.lineTo(-s*0.4, s*0.5); // left wing back
+  ctx.lineTo(-s*1.1, s*0.3); // left wingtip
+  ctx.lineTo(-s*0.4, 0);     // left wing front
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.setTransform(1,0,0,1,0,0);
+  ctx.globalAlpha = alpha;
+
+  // ── Label ──
+  const labelY = y - ringR - 8;
+  ctx.font = `bold ${isSelected ? 13 : 11}px 'Courier New'`;
+  ctx.textAlign = 'center';
+
+  // Shadow
+  ctx.shadowColor = 'rgba(0,0,0,0.8)';
+  ctx.shadowBlur = 6;
+
+  ctx.fillStyle = isSelected ? '#00ff88' : '#4fc3f7';
+  ctx.fillText(callsign, x, labelY);
+  ctx.font = `${isSelected ? 11 : 9}px 'Courier New'`;
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.fillText(`${(altFt/1000).toFixed(0)}k ft · ${distNM}nm`, x, labelY - 14);
+
+  ctx.shadowBlur = 0;
+  ctx.shadowColor = 'transparent';
+
+  // ── Vertical dashed line ──
+  if (inView) {
+    ctx.beginPath();
+    ctx.setLineDash([3, 4]);
+    ctx.moveTo(x, y + ringR);
+    ctx.lineTo(x, Math.min(y + 60, canvas.height - 160));
+    ctx.strokeStyle = isSelected ? 'rgba(0,255,136,0.25)' : 'rgba(79,195,247,0.15)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // ── Off-screen arrow ──
+  if (!inView) {
+    const angle = Math.atan2(y - canvas.height/2, x - canvas.width/2);
+    const ex = canvas.width/2 + Math.cos(angle) * (Math.min(canvas.width, canvas.height)/2 - 40);
+    const ey = canvas.height/2 + Math.sin(angle) * (Math.min(canvas.width, canvas.height)/2 - 100);
+
+    ctx.save();
+    ctx.translate(ex, ey);
+    ctx.rotate(angle + Math.PI/2);
+    ctx.fillStyle = isSelected ? 'rgba(0,255,136,0.9)' : 'rgba(79,195,247,0.5)';
+    ctx.beginPath();
+    ctx.moveTo(0, -10);
+    ctx.lineTo(6, 4);
+    ctx.lineTo(-6, 4);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+
+    // Label near arrow
+    ctx.font = '10px Courier New';
+    ctx.fillStyle = isSelected ? 'rgba(0,255,136,0.9)' : 'rgba(79,195,247,0.6)';
+    ctx.textAlign = 'center';
+    ctx.fillText(callsign, ex, ey + 18);
+  }
+
+  ctx.restore();
+}
+
+// ─────────────────────────────────────────────
+// DRAW LOOP
+// ─────────────────────────────────────────────
+function drawHorizonGuide() {
+  // Draw a subtle horizon line based on pitch
+  const cy = canvas.height / 2;
+  const horizonY = cy + (devicePitch / (FOV_V/2)) * cy;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(0, horizonY);
+  ctx.lineTo(canvas.width, horizonY);
+  ctx.strokeStyle = 'rgba(0,255,136,0.08)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([8, 12]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+
+  // Pitch indicator
+  ctx.save();
+  ctx.font = '9px Courier New';
+  ctx.fillStyle = 'rgba(0,255,136,0.4)';
+  ctx.textAlign = 'right';
+  ctx.fillText(`PITCH ${devicePitch > 0 ? '+' : ''}${Math.round(devicePitch)}°`, canvas.width - 12, horizonY - 4);
+  ctx.restore();
+}
+
+function drawFrame() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  if (!userLat) { animFrame = requestAnimationFrame(drawFrame); return; }
+
+  drawHorizonGuide();
+
+  // Update flight distances/bearings every frame (they move)
+  flights.forEach(f => {
+    f.bearing = bearingTo(userLat, userLon, f.lat, f.lng);
+    const altFt = (f.alt || 0) * 3.28084;
+    f.elevation = elevationAngle(f.distNM, altFt);
+  });
+
+  // Draw all non-selected flights first
+  flights.forEach(f => {
+    if (selectedFlight && f.hex === selectedFlight.hex) return;
+    const pos = projectToScreen(f);
+    if (pos) drawPlaneMarker(f, pos, false);
+  });
+
+  // Draw selected on top
+  if (selectedFlight) {
+    const pos = projectToScreen(selectedFlight);
+    if (pos) drawPlaneMarker(selectedFlight, pos, true);
+  }
+
+  animFrame = requestAnimationFrame(drawFrame);
+}
+
+// ─────────────────────────────────────────────
+// STARTUP SEQUENCE
+// ─────────────────────────────────────────────
+async function startCamera() {
+  document.getElementById('permission-screen').style.display = 'none';
+  document.getElementById('loading-screen').style.display = 'flex';
+
+  setLoadStatus('REQUESTING CAMERA...');
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } },
+      audio: false
+    });
+    const video = document.getElementById('camera-feed');
+    video.srcObject = stream;
+    await video.play();
+
+    setLoadStatus('GETTING LOCATION...');
+    try {
+      await getLocation();
+    } catch(e) {
+      showToast('Location unavailable — using demo mode');
+      // Demo: St. Louis area
+      userLat = 38.627; userLon = -90.197;
+    }
+
+    setLoadStatus('SETTING UP SENSORS...');
+    setupOrientation();
+    buildCompass();
+
+    setLoadStatus('FETCHING FLIGHTS...');
+    await fetchFlights();
+
+    setLoadStatus('READY');
+    setTimeout(() => {
+      document.getElementById('loading-screen').style.display = 'none';
+      drawFrame();
+    }, 600);
+
+    // Auto-refresh
+    setInterval(fetchFlights, REFRESH_INTERVAL);
+
+  } catch(e) {
+    console.error(e);
+    if (e.name === 'NotAllowedError') {
+      document.getElementById('loading-screen').style.display = 'none';
+      document.getElementById('permission-screen').style.display = 'flex';
+    } else {
+      setLoadStatus('ERROR: ' + e.message);
+    }
+  }
+}
+
+// Refresh button
+document.getElementById('refresh-btn').addEventListener('click', () => {
+  fetchFlights();
+  document.getElementById('refresh-btn').style.transform = 'rotate(360deg)';
+  document.getElementById('refresh-btn').style.transition = 'transform 0.5s';
+  setTimeout(() => {
+    document.getElementById('refresh-btn').style.transform = '';
+    document.getElementById('refresh-btn').style.transition = '';
+  }, 500);
+});
+
+// Auto-start
+window.addEventListener('load', startCamera);
+</script>
+</body>
+</html>
